@@ -3,3 +3,5 @@ V2 of [Strange Loops](https://camps.aptaracorp.com/ACM_PMS/PMS/ACM/TEI23/76/6383
 Instead of Serial, all data is streamed via sockets :
 * TGAM -> ESP32 -> LED strips -> optic fibers
 * TGAM -> PC -> Max4Live
+
+For the moment streaming EEG data from PC is overkill but I will use this code for multi-client app in the future 

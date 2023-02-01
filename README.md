@@ -5,3 +5,11 @@ Instead of Serial, all data is streamed via sockets :
 * TGAM -> PC -> Max4Live
 
 For the moment streaming EEG data from PC is overkill but I will use this code for multi-client app in the future 
+
+## Requirements
+### ESP32
+* ArduinoJson
+* WebSocketsClient
+* SocketIOclient
+### PC
+* ThinkGear Connector

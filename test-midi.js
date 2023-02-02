@@ -7,7 +7,7 @@ var output = new easymidi.Output('loopMIDI Port');
 output.send('noteon', {
   note: 64, 
   velocity: 127,
-  channel: 3
+  channel: 3 // easymidi : chan_3 -> ableton : chan_4  
 });
 
 

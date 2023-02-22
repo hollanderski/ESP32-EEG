@@ -1,5 +1,5 @@
 // Available virtual MIDI port created with loopMIDI
-var ports = ['loopMIDI Port', 'Meditation MIDI', 'BetaBusy MIDI', 'AlphaRest MIDI'];
+var ports = ['loopMIDI Port', 'Meditation MIDI', 'BetaBusy MIDI', 'Attention MIDI', 'Gamelan Sampler'];
 
 // PSD bands
 const bands = {"delta":0, "theta":1, "lowAlpha":2, "highAlpha":3, "lowBeta":4, "highBeta":5, "lowGamma":6, "midGamma":7};
@@ -8,29 +8,40 @@ var min_channels = [10000000,10000000,10000000,10000000,10000000,10000000,100000
 var max_channels = [0,0,0,0,0,0,0,0]
 
 // codes for MIDI notes, note that octave number seems different in Ableton than standard
-const midi_notes = {"D2":50, "G#1":44, "E1":40, "E2":52, "G#2":56};
+const midi_notes = {"D2":50, "G#1":44, "E1":40, "E2":52, "G#2":56, "C4":72, "C3":60};
 const notes_cymbals = ["E2", "G#2"]
+const mallet_cc = { "low": 5, "high":6}
 
 
 var easymidi = require('easymidi');
+var btSerial = new (require("bluetooth-serial-port").BluetoothSerialPort)();
+
+// all the custom LED mode that can be triggered via bluetooth message sent to ESP32
+const LED_modes = {"blink":'5',"roll":'3', "betaclochette":'6', "drone":'1', "meditationpeak":'4', "emotion":'2'};
 
 // Differents parts of the music piece 
-const music_struct = [2*60, 4*60, 6*60, 8*60, 10*60, 12*60];
+const music_struct = {"introduction" : 0, "drones" : 2*60, "transe":4*60, "attention" : 5*60, "emotion" : 8*60, "cappella": 10*60, "final" : 12*60};
 
 // MIDI Input used to track Ableton Clock 
 const input = new easymidi.Input(ports[0]);
 
-// 2 MIDI Outputs for different instruments 
+// 4 MIDI Outputs for different instruments 
 var betabusy = new easymidi.Output(ports[2]);
 var meditation = new easymidi.Output(ports[1]);
+var attention = new easymidi.Output(ports[3]);
+var gamelan_sampler = new easymidi.Output(ports[4]);
 
 
 var NB_TICKS = 0;	// Ticks of Ableton's MIDI Clock
 var CURRENT_TIME = 0;	// Current time in Ableton track
 
 var state = true;
-var THRESHOLD_MEDITATION=90;
+var THRESHOLD_MEDITATION = 60;
+var THRESHOLD_ATTENTION = 80;
+var THRESHOLD_BLINK = 50;
+var THRESHOLD_POORSIGNAL = 51; //81; //60;
 var DEMO_MODE = false;	// either test data or real EEG data
+var is_sample_over = true;
 
 if(!DEMO_MODE){
 
@@ -49,44 +60,95 @@ if(!DEMO_MODE){
 	client_eeg.connect();
 
 
-	client_eeg.on('data',function(data){
+	// Bluetooth connection with ESP32 :
+	btSerial.on("found", function (address, name) {
+
+    if(name=="Ninon's ESP32 BT"){
+
+        console.log("Ninon est dans la place")
+        btSerial.findSerialPortChannel(
+            address,
+            function (channel) {
+                btSerial.connect(
+                    address,
+                    channel,
+                    function () {
+                        console.log("connected");
+
+                        sendMsgBT(btSerial, '5');
+                        // DO STUFF WITH EEG
+                        process_eeg(btSerial);
+                    },
+                    function () {
+                        console.log("cannot connect");
+                    });
+                btSerial.close();
+              },
+            function () {
+                console.log("found nothing");
+            });
+      }
+   });
+
+	btSerial.inquire();
 
 
-    // check signal quality
-    if(data.poorSignalLevel<50){
+		function process_eeg(btSerial){
 
-    	console.log("BAD SIGNAL: ", data.poorSignalLevel);
+			
+			client_eeg.on('data',function(data){
 
-    } else {
-
-    	arr= Object.values(data.eegPower)
-
-    	// to get rid of exponential gap between EEG PSD values
-    	result = arr.map(x => x!=0? Math.log(x) : 0);
-    	newValues = compute_values(result) // scaling 0-127
-    	data["psd_scaled"] = newValues;
+			console.log("data")
 
 
-    	eeg_symphony(CURRENT_TIME, data);
+	    // check signal quality
+	    if(data.poorSignalLevel>THRESHOLD_POORSIGNAL){
 
-    }
-      //socket.emit('data_eeg', {value: data});
-    });
+	    	console.log("BAD SIGNAL: ", data.poorSignalLevel);
 
-	// blinkStrength ranges from 1 to 255 
-    client_eeg.on('blink_data',function(data){
-    	eeg_symphony(CURRENT_TIME, data);
-	});
+	    } else {
 
-    client_eeg.on('error',function(error){
-      console.log(error);
-      //socket.emit('error_eeg', {value: data});
-    });
+	    
+		    	arr= Object.values(data.eegPower)
 
-    client_eeg.on('close',function(){
-      console.log('closing.');
-    });
+		    	// to get rid of exponential gap between EEG PSD values
+		    	result = arr.map(x => x!=0? Math.log(x) : 0);
 
+		    	newValues = compute_values(result) // scaling 0-127
+
+		    	psd = {"psd_scaled" : newValues};
+		    	psd["eSense"]=data["eSense"]
+
+		    	//data["psd_scaled"] = newValues;
+
+		    	eeg_symphony(CURRENT_TIME, psd, btSerial);
+
+	    }
+	      //socket.emit('data_eeg', {value: data});
+	    });
+
+
+	    
+
+
+		// blinkStrength ranges from 1 to 255 
+	    client_eeg.on('blink_data',function(data){
+	    	eeg_symphony(CURRENT_TIME, data, btSerial);
+		});
+
+		
+		
+
+	    client_eeg.on('error',function(error){
+	      console.log(error);
+	      //socket.emit('error_eeg', {value: data});
+	    });
+
+	    client_eeg.on('close',function(){
+	      console.log('closing.');
+	    });
+
+  }
 
 }
 
@@ -94,34 +156,43 @@ if(!DEMO_MODE){
 
 /* Main Symphony Structure */
 
-function eeg_symphony(time, data){
+function eeg_symphony(time, data, btSerial){
 
-	console.log(time, data);
+	console.log("SYMPHONY TIME = ", time, data);
 
-	if(time < music_struct[0]){
+	if(time < music_struct["drones"]){
 
 		if(state){
 			console.log("Introduction percussions");
 			state=false;
 		}
 
-		introduction(data);
+		introduction(data, btSerial);
 
 
-	} else if(time >= music_struct[0] && time < music_struct[1]){
+	} else if(time >= music_struct["drones"] && time < music_struct["transe"]){ // attention
 
-		if(time == music_struct[0]){
+		if(time == music_struct["drones"]){
 			console.log("Entrée des drones");
 		}
 
-		drones(data);
+		drones(data, btSerial);
 
 
-	} else if(time > music_struct[1] && time < music_struct[2]){
+	} 
 
-		console.log("Attention");
+	if(time > music_struct["transe"] && time < music_struct["emotion"]){
 
-	} else if(time > music_struct[2] && time < music_struct[3]){
+		if(time == music_struct["attention"]){
+			console.log("Attention Tic Tac");
+		}
+
+		console.log("Attention Tic Tac");
+		attention_please(data, btSerial);
+
+	}
+
+	/* else if(time > music_struct["emotion"] && time < music_struct["cappella"]){
 
 		console.log("Transe en danse");
 
@@ -138,12 +209,14 @@ function eeg_symphony(time, data){
 		console.log("Fin");
 
 	}
+
+	*/
 }
 
 
 /* Symphony Parts */ 
 
-function introduction(data){
+function introduction(data, btSerial){
 
 	/* 
 
@@ -157,21 +230,38 @@ function introduction(data){
 
 	*/
 
-	if("blinkStrength" in data  &&  data["blinkStrength"] >= 200){ 
-		console.log("BLINK")
-		sendCymbalKick();
-	}
+	if("blinkStrength" in data  &&  data["blinkStrength"] >= THRESHOLD_BLINK){ 
+		
 
-
-	if(indexOfMax(data["psd_scaled"])==bands["highBeta"]){
-		console.log("BETA ROLLS")
+		console.log("Cymball Roll")
 		sendCymbalRolls();
+		sendMsgBT(btSerial, LED_modes["blink"]);
+		//sendMsgBT(btSerial, LED_modes["roll"]);
+		// c erased by next
 	}
+
+
+	if("psd_scaled" in data){
+
+			if(indexOfMax(data["psd_scaled"])==bands["highBeta"]){
+
+				console.log("Cymbal Kick")
+				sendCymbalKick();
+				sendMsgBT(btSerial, LED_modes["blink"]);
+				
+			}
+
+			modulateMallet(data["psd_scaled"][bands["lowBeta"]], "low");
+			modulateMallet(data["psd_scaled"][bands["highBeta"]], "high");
+			sendMsgBT(btSerial, LED_modes["betaclochette"]);
+
+	}
+	
 	
 
 }
 
-function drones(data){
+function drones(data, btSerial){
 
 	/* 
 
@@ -195,20 +285,30 @@ function drones(data){
 	val_theta = data["psd_scaled"][bands["theta"]]
 	
 
-	console.log(val_lowalph,val_highalph,val_theta,val_lowgam)
-	
-	modulateDrone(val_lowgam,0);
+	//console.log(val_lowalph,val_highalph) 
 	modulateDrone(val_lowalph,3);
+	sendMsgBT(btSerial, LED_modes["drone"]);
 
-    modulateDrone(val_highalph,2);
-    modulateDrone(val_theta,1);
+    //modulateDrone(val_highalph,2);
+    //modulateDrone(val_theta,1);
 
 
     // GAMELAN
 
-    volume = data["eSense"]["meditation"]*1.27 	// scaling for CC message
-    console.log("VOLUME ", )
-    gamelanVolume(volume);
+    //volume = data["eSense"]["meditation"]*1.27 	// scaling for CC message
+    //console.log("VOLUME ", )
+    //gamelanVolume(volume);
+
+    console.log(data["eSense"])
+    if(data["eSense"]["meditation"]>THRESHOLD_MEDITATION){
+
+    	console.log("GAMELAN");
+    	sendMsgBT(btSerial, LED_modes["meditationpeak"]);
+    	if(is_sample_over){
+    		is_sample_over=false;
+    		playGamelanSample();
+    	}
+    }
 
 /*
     if(data["meditation"]>THRESHOLD_MEDITATION){
@@ -219,13 +319,33 @@ function drones(data){
 
 }
 
-function attention(){
+function attention_please(data, btSerial){
 
 	/* 
 
-	Attention is defined by rhythmic loop
+	Attention is defined by rhythmic loop whose texture is controlled 
+	by attention level + delta wave (or theta?)
+
+	CC availables on Attention MIDI port : CC3 (saturation/tape + pitch), CC5 (beat metallique), CC6 (non linear wave), CC8 (high pitch dreamy drone), CC9 (Free Dive Chromos)
 
 	*/
+
+	console.log("ATTENTION PLEASE!!")
+
+	val_delta = data["psd_scaled"][bands["delta"]]
+	modulateAttention(val_delta,6);
+	val_att_scaled = data["eSense"]["attention"] *1.27;
+	modulateAttention(val_att_scaled,9); // attention ne module paas assez amplement  ou 1
+
+	console.log(val_delta, val_att_scaled);
+
+    if(data["eSense"]["attention"]>THRESHOLD_ATTENTION){
+    	console.log("THRESHOLD_ATTENTION")
+    	sendMsgBT(btSerial, LED_modes["roll"]); //? 
+    }
+
+  
+ 
 }
 
 function emotion(){
@@ -285,12 +405,61 @@ let sendCymbalKick = () => {
 let modulateDrone = (val, chan) => {
 
     meditation.send('cc', {
-    controller: 1,
+    controller: 3,
     value: val,
     channel: chan
   });
 
 }
+
+let modulateMallet = (val, band) => {
+
+    betabusy.send('cc', {
+    controller: mallet_cc[band],
+    value: val,
+    channel: 3
+  });
+
+}
+
+
+
+let modulateAttention = (val, cc) => {
+
+    attention.send('cc', {
+    controller: cc,
+    value: val,
+    channel: 1
+  });
+
+}
+
+
+let playGamelanSample = () => {
+
+	// C3 ou C4
+
+
+    gamelan_sampler.send('noteon', {
+	    note: midi_notes["C4"],
+	  	velocity: 127, // ici indiquer different sample (mappés par vélocité)
+	  	channel: 3
+  });
+ 
+
+    setTimeout(() => {
+
+    	is_sample_over = true;
+
+        gamelan_sampler.send('noteoff', {
+	        note: midi_notes["C4"],
+	  		velocity: 127, 
+	  		channel: 3
+      });
+
+    }, 10000);
+}
+
 
 
 let gamelanVolume = (volume) => {
@@ -318,6 +487,17 @@ let gamelanVolume = (volume) => {
 
 
 /* Utils */
+
+
+// Send a message to ESP32 via Bluetooth
+function sendMsgBT(btSerial, msg){
+
+	btSerial.write(Buffer.from(msg), function(err, count) {
+  if (err) {
+  	console.log('Error received: ' + err);
+  }});
+}
+
 
 function get_time() {
 	NB_TICKS++;
@@ -382,6 +562,10 @@ function indexOfMax(arr) {
 }
 
 
+Number.prototype.map = function (in_min, in_max, out_min, out_max) {
+  return (this - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
+
 function update_boundaries(channels){
 
   for(var i=0; i<channels.length; i++){
@@ -389,8 +573,6 @@ function update_boundaries(channels){
       min_channels[i]=channels[i]
     if(max_channels[i]<channels[i])
       max_channels[i]=channels[i]
-    if(GLOBALMAX<channels[i])
-      GLOBALMAX = channels[i]
   }
 
 }

@@ -17,7 +17,7 @@ var easymidi = require('easymidi');
 var btSerial = new (require("bluetooth-serial-port").BluetoothSerialPort)();
 
 // all the custom LED mode that can be triggered via bluetooth message sent to ESP32
-const LED_modes = {"blink":'5',"roll":'3', "betaclochette":'6', "drone":'1', "meditationpeak":'4', "emotion":'2'};
+const LED_modes = {"blink":5,"roll":3, "betaclochette":6, "aqua":1, "meditationpeak":4, "emotion":2, "drone":7, "gamelan":8};
 
 // Differents parts of the music piece 
 const music_struct = {"introduction" : 0, "drones" : 2*60, "transe":4*60, "attention" : 5*60, "emotion" : 8*60, "cappella": 10*60, "final" : 12*60};
@@ -42,6 +42,7 @@ var THRESHOLD_BLINK = 50;
 var THRESHOLD_POORSIGNAL = 51; //81; //60;
 var DEMO_MODE = false;	// either test data or real EEG data
 var is_sample_over = true;
+var is_blinking = false;
 
 if(!DEMO_MODE){
 
@@ -236,6 +237,13 @@ function introduction(data, btSerial){
 		console.log("Cymball Roll")
 		sendCymbalRolls();
 		sendMsgBT(btSerial, LED_modes["blink"]);
+		is_blinking=true;
+		setTimeout(() => {
+
+	        is_blinking=false;
+
+	    }, 100);
+
 		//sendMsgBT(btSerial, LED_modes["roll"]);
 		// c erased by next
 	}
@@ -248,12 +256,19 @@ function introduction(data, btSerial){
 				console.log("Cymbal Kick")
 				sendCymbalKick();
 				sendMsgBT(btSerial, LED_modes["blink"]);
+				is_blinking=true;
+				setTimeout(() => {
+
+			        is_blinking=false;
+
+			    }, 100);
 				
 			}
 
 			modulateMallet(data["psd_scaled"][bands["lowBeta"]], "low");
 			modulateMallet(data["psd_scaled"][bands["highBeta"]], "high");
-			sendMsgBT(btSerial, LED_modes["betaclochette"]);
+			if(!is_blinking)
+				sendMsgBT(btSerial, LED_modes["betaclochette"]);
 
 	}
 	
@@ -287,7 +302,8 @@ function drones(data, btSerial){
 
 	//console.log(val_lowalph,val_highalph) 
 	modulateDrone(val_lowalph,3);
-	sendMsgBT(btSerial, LED_modes["drone"]);
+	sendMsgBT(btSerial, LED_modes["drone"],val_lowalph.map(0,127,0,255));
+	// mapper en 255 /!\
 
     //modulateDrone(val_highalph,2);
     //modulateDrone(val_theta,1);
@@ -303,7 +319,7 @@ function drones(data, btSerial){
     if(data["eSense"]["meditation"]>THRESHOLD_MEDITATION){
 
     	console.log("GAMELAN");
-    	sendMsgBT(btSerial, LED_modes["meditationpeak"]);
+    	sendMsgBT(btSerial, LED_modes["gamelan"]);
     	if(is_sample_over){
     		is_sample_over=false;
     		playGamelanSample();
@@ -490,9 +506,18 @@ let gamelanVolume = (volume) => {
 
 
 // Send a message to ESP32 via Bluetooth
-function sendMsgBT(btSerial, msg){
+function sendMsgBT(btSerial, mode, val=null){
 
-	btSerial.write(Buffer.from(msg), function(err, count) {
+	data_sent = {"mode": mode};
+
+	if(val!=null){
+		data_sent["val"]=val;
+	}
+
+	// var buf = Buffer.from(JSON.stringify(obj));
+	var buf = Buffer.from(JSON.stringify(data_sent));
+
+	btSerial.write(buf, function(err, count) {
   if (err) {
   	console.log('Error received: ' + err);
   }});
